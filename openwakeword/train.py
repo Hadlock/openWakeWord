@@ -897,6 +897,11 @@ if __name__ == '__main__':
         # Export the trained model to onnx
         oww.export_model(model=best_model, model_name=config["model_name"], output_dir=config["output_dir"])
 
-        # Convert the model from onnx to tflite format
-        convert_onnx_to_tflite(os.path.join(config["output_dir"], config["model_name"] + ".onnx"),
-                               os.path.join(config["output_dir"], config["model_name"] + ".tflite"))
+        # Convert the model from onnx to tflite format unless explicitly skipped.
+        if os.getenv("OPENWAKEWORD_SKIP_TFLITE", "0") != "1":
+            convert_onnx_to_tflite(
+                os.path.join(config["output_dir"], config["model_name"] + ".onnx"),
+                os.path.join(config["output_dir"], config["model_name"] + ".tflite"),
+            )
+        else:
+            logging.info("Skipping tflite export because OPENWAKEWORD_SKIP_TFLITE=1")
