@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import re
 import shutil
@@ -21,6 +22,7 @@ from typing import Iterable
 import datasets  # type: ignore[import-not-found]
 import numpy as np
 import scipy.io.wavfile  # type: ignore[import-not-found]
+import scipy.signal  # type: ignore[import-not-found]
 import yaml
 
 DEFAULT_WORKDIR = Path(os.getenv("OPENWAKEWORD_WORKDIR", "/workspace"))
@@ -34,6 +36,7 @@ DEFAULT_STEPS = int(os.getenv("OPENWAKEWORD_STEPS", "10000"))
 DEFAULT_SAMPLES = int(os.getenv("OPENWAKEWORD_SAMPLES", "1000"))
 DEFAULT_SAMPLES_VAL = int(os.getenv("OPENWAKEWORD_SAMPLES_VAL", "1000"))
 DEFAULT_TTS_BATCH = int(os.getenv("OPENWAKEWORD_TTS_BATCH", "50"))
+TARGET_TTS_SAMPLE_RATE = int(os.getenv("OPENWAKEWORD_TTS_SAMPLE_RATE", "16000"))
 DEFAULT_FMA_HOURS = float(os.getenv("OPENWAKEWORD_FMA_HOURS", "1"))
 SKIP_AUDIOSET = os.getenv("OPENWAKEWORD_SKIP_AUDIOSET", "0") == "1"
 
@@ -254,13 +257,58 @@ def write_training_config(
     return config_path
 
 
+def resample_wav(path: Path, target_rate: int = TARGET_TTS_SAMPLE_RATE) -> bool:
+    sample_rate, data = scipy.io.wavfile.read(path)
+    if sample_rate == target_rate:
+        return False
+
+    original_dtype = data.dtype
+    if data.ndim > 1:
+        data = data[:, 0]
+
+    gcd = math.gcd(sample_rate, target_rate)
+    resampled = scipy.signal.resample_poly(
+        data.astype(np.float32),
+        target_rate // gcd,
+        sample_rate // gcd,
+    )
+
+    if np.issubdtype(original_dtype, np.integer):
+        limits = np.iinfo(original_dtype)
+        resampled = np.clip(np.rint(resampled), limits.min, limits.max).astype(original_dtype)
+    else:
+        resampled = resampled.astype(original_dtype)
+
+    scipy.io.wavfile.write(path, target_rate, resampled)
+    return True
+
+
+def normalize_generated_wavs(config_path: Path) -> None:
+    config = yaml.safe_load(config_path.read_text())
+    model_dir = Path(config["output_dir"]) / config["model_name"]
+    clip_dirs = ("positive_train", "positive_test", "negative_train", "negative_test")
+    checked = 0
+    resampled = 0
+
+    for clip_dir in clip_dirs:
+        for wav_path in (model_dir / clip_dir).glob("*.wav"):
+            checked += 1
+            if resample_wav(wav_path):
+                resampled += 1
+
+    if checked:
+        logging.info("checked %s generated wav files; resampled %s to %s Hz", checked, resampled, TARGET_TTS_SAMPLE_RATE)
+
+
 def run_training_process(config_path: Path, workdir: Path) -> None:
+    generate_cmd = [sys.executable, "-m", "openwakeword.train", "--training_config", str(config_path), "--generate_clips"]
     commands: Iterable[list[str]] = (
-        [sys.executable, "-m", "openwakeword.train", "--training_config", str(config_path), "--generate_clips"],
         [sys.executable, "-m", "openwakeword.train", "--training_config", str(config_path), "--augment_clips"],
         [sys.executable, "-m", "openwakeword.train", "--training_config", str(config_path), "--train_model"],
     )
 
+    subprocess.run(generate_cmd, check=True, cwd=workdir)
+    normalize_generated_wavs(config_path)
     for cmd in commands:
         subprocess.run(cmd, check=True, cwd=workdir)
 
