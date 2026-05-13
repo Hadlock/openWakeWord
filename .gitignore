@@ -142,3 +142,6 @@ examples/
 
 # archive files
 archive/
+
+# Local Docker training workspace and generated models
+models/
