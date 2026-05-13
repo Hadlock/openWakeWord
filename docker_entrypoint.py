@@ -221,7 +221,7 @@ def write_training_config(
     *,
     session_dir: Path,
     slug: str,
-    wakeword: str,
+    wakewords: list[str],
     rir_dir: Path,
     audioset_dir: Path | None,
     fma_dir: Path,
@@ -234,7 +234,7 @@ def write_training_config(
 ) -> Path:
     config = yaml.safe_load((Path("/app/examples/custom_model.yml")).read_text())
 
-    config["target_phrase"] = [wakeword]
+    config["target_phrase"] = wakewords
     config["model_name"] = slug
     config["output_dir"] = str(session_dir)
     config["rir_paths"] = [str(rir_dir)]
@@ -274,7 +274,15 @@ def locate_onnx_model(session_dir: Path, slug: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train an openWakeWord model inside Docker")
-    parser.add_argument("-c", "--wakeword", required=True, help="Wake word phrase to synthesise and train")
+    parser.add_argument(
+        "-c",
+        "--wakeword",
+        dest="wakewords",
+        action="append",
+        required=True,
+        help="Wake word phrase to synthesise and train; repeat for multiple trigger phrases",
+    )
+    parser.add_argument("--model-name", help="Output model name; defaults to the first wake word slug")
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS, help="Training steps")
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES, help="Synthetic training samples")
     parser.add_argument("--samples-val", type=int, default=DEFAULT_SAMPLES_VAL, help="Synthetic validation samples")
@@ -283,11 +291,12 @@ def main() -> None:
 
     configure_logging()
 
-    wakeword = args.wakeword.strip()
-    if not wakeword:
-        parser.error("Wake word must not be empty")
+    wakewords = [wakeword.strip() for wakeword in args.wakewords if wakeword.strip()]
+    if not wakewords:
+        parser.error("At least one non-empty wake word must be provided")
 
-    slug = slugify_phrase(wakeword)
+    slug = slugify_phrase(args.model_name.strip() if args.model_name else wakewords[0])
+    wakeword_label = "', '".join(wakewords)
     session_dir = DEFAULT_WORKDIR / slug
     serve_dir = session_dir / "serve"
     rir_dir = session_dir / "mit_rirs"
@@ -307,7 +316,7 @@ def main() -> None:
         config_path = write_training_config(
             session_dir=session_dir,
             slug=slug,
-            wakeword=wakeword,
+            wakewords=wakewords,
             rir_dir=rir_dir,
             audioset_dir=audioset_dir,
             fma_dir=fma_dir,
@@ -319,7 +328,7 @@ def main() -> None:
             tts_batch=args.tts_batch,
         )
 
-        logging.info("starting training for '%s' this will take a while", wakeword)
+        logging.info("starting training for '%s' this will take a while", wakeword_label)
         start_time = time.time()
         stop_event = threading.Event()
         progress_thread = start_progress_logger(stop_event)
@@ -337,7 +346,7 @@ def main() -> None:
         duration = timedelta(seconds=int(time.time() - start_time))
         logging.info(
             "training complete for '%s'; download at http://0.0.0.0:8080/%s.onnx (took %s)",
-            wakeword,
+            wakeword_label,
             slug,
             duration,
         )

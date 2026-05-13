@@ -60,6 +60,19 @@ RUN git clone https://github.com/rhasspy/piper-sample-generator ${OPENWAKEWORD_P
     mkdir -p ${OPENWAKEWORD_PIPER_DIR}/models && \
     wget -O ${OPENWAKEWORD_PIPER_DIR}/models/${OPENWAKEWORD_PIPER_MODEL} ${OPENWAKEWORD_PIPER_MODEL_URL}
 
+# openWakeWord's trainer imports the older top-level generate_samples module.
+# The current piper-sample-generator exposes that function from its package.
+RUN pip install --no-cache-dir piper-tts==1.4.2 && \
+    printf '%s\n' \
+        'import os' \
+        'from pathlib import Path' \
+        'from piper_sample_generator.__main__ import generate_samples as _generate_samples' \
+        '' \
+        'def generate_samples(*args, **kwargs):' \
+        '    kwargs.setdefault("model", str(Path(os.getenv("OPENWAKEWORD_PIPER_DIR", "/opt/piper-sample-generator")) / "models" / os.getenv("OPENWAKEWORD_PIPER_MODEL", "en_US-libritts_r-medium.pt")))' \
+        '    return _generate_samples(*args, **kwargs)' \
+        > ${OPENWAKEWORD_PIPER_DIR}/generate_samples.py
+
 # Fetch required openWakeWord resource models for ONNX inference.
 RUN mkdir -p ${OPENWAKEWORD_RESOURCES_DIR} && \
     wget -O ${OPENWAKEWORD_RESOURCES_DIR}/embedding_model.onnx https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx && \
